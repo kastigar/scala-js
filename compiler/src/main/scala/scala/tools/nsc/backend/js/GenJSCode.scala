@@ -1804,42 +1804,46 @@ abstract class GenJSCode extends SubComponent
 
       val isString = isStringType(receiver0.tpe)
 
-      funName match {
-        case "unary_+" | "unary_-" | "unary_~" | "unary_!" =>
-          assert(argc == 0)
-          js.UnaryOp(funName.substring(funName.length-1), receiver)
+      sym.getAnnotation(JSNameAnnotation) flatMap (_ stringArg 0) map {
+        name => js.ApplyMethod(receiver, js.PropertyName(name), args)
+      } getOrElse {
+        funName match {
+          case "unary_+" | "unary_-" | "unary_~" | "unary_!" =>
+            assert(argc == 0)
+            js.UnaryOp(funName.substring(funName.length-1), receiver)
 
-        case "+" | "-" | "*" | "/" | "%" | "<<" | ">>" | ">>>" |
-             "&" | "|" | "^" | "&&" | "||" =>
-          assert(argc == 1)
-          js.BinaryOp(funName, receiver, args.head)
+          case "+" | "-" | "*" | "/" | "%" | "<<" | ">>" | ">>>" |
+               "&" | "|" | "^" | "&&" | "||" =>
+            assert(argc == 1)
+            js.BinaryOp(funName, receiver, args.head)
 
-        case "apply" =>
-          js.Apply(receiver, args)
+          case "apply" =>
+            js.Apply(receiver, args)
 
-        case "charAt" | "codePointAt" if isString =>
-          js.ApplyMethod(receiver, js.Ident("charCodeAt"), args)
+          case "charAt" | "codePointAt" if isString =>
+            js.ApplyMethod(receiver, js.Ident("charCodeAt"), args)
 
-        case "length" if isString =>
-          js.DotSelect(receiver, js.Ident("length"))
+          case "length" if isString =>
+            js.DotSelect(receiver, js.Ident("length"))
 
-        case _ =>
-          def wasNullaryMethod(sym: Symbol) = {
-            beforePhase(currentRun.uncurryPhase) {
-              sym.tpe.isInstanceOf[NullaryMethodType]
+          case _ =>
+            def wasNullaryMethod(sym: Symbol) = {
+              beforePhase(currentRun.uncurryPhase) {
+                sym.tpe.isInstanceOf[NullaryMethodType]
+              }
             }
-          }
 
-          if (argc == 0 && (sym.isGetter || wasNullaryMethod(sym))) {
-            js.Select(receiver, js.PropertyName(funName))
-          } else if (argc == 1 && sym.isSetter) {
-            statToExpr(js.Assign(
-                js.Select(receiver,
-                    js.PropertyName(funName.substring(0, funName.length-2))),
-                args.head))
-          } else {
-            js.ApplyMethod(receiver, js.PropertyName(funName), args)
-          }
+            if (argc == 0 && (sym.isGetter || wasNullaryMethod(sym))) {
+              js.Select(receiver, js.PropertyName(funName))
+            } else if (argc == 1 && sym.isSetter) {
+              statToExpr(js.Assign(
+                  js.Select(receiver,
+                      js.PropertyName(funName.substring(0, funName.length-2))),
+                  args.head))
+            } else {
+              js.ApplyMethod(receiver, js.PropertyName(funName), args)
+            }
+        }
       }
     }
 
