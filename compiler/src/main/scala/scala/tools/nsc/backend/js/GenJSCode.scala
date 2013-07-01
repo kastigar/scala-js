@@ -1797,53 +1797,52 @@ abstract class GenJSCode extends SubComponent
       val sym = tree.symbol
       val Apply(fun @ Select(receiver0, _), args0) = tree
 
-      val funName = sym.nameString
+      val funName = jsNameOf(sym) getOrElse sym.nameString
       val receiver = genExpr(receiver0)
       val args = genPrimitiveJSArgs(sym, args0)
       val argc = args.length
 
       val isString = isStringType(receiver0.tpe)
 
-      sym.getAnnotation(JSNameAnnotation) flatMap (_ stringArg 0) map {
-        name => js.ApplyMethod(receiver, js.PropertyName(name), args)
-      } getOrElse {
-        funName match {
-          case "unary_+" | "unary_-" | "unary_~" | "unary_!" =>
-            assert(argc == 0)
-            js.UnaryOp(funName.substring(funName.length-1), receiver)
+      lazy val forceFunction =
+        isScalaJSDefined && sym.getAnnotation(JSFuncAnnotation).isDefined
 
-          case "+" | "-" | "*" | "/" | "%" | "<<" | ">>" | ">>>" |
-               "&" | "|" | "^" | "&&" | "||" =>
-            assert(argc == 1)
-            js.BinaryOp(funName, receiver, args.head)
+      funName match {
+        case "unary_+" | "unary_-" | "unary_~" | "unary_!" =>
+          assert(argc == 0)
+          js.UnaryOp(funName.substring(funName.length-1), receiver)
 
-          case "apply" =>
-            js.Apply(receiver, args)
+        case "+" | "-" | "*" | "/" | "%" | "<<" | ">>" | ">>>" |
+             "&" | "|" | "^" | "&&" | "||" =>
+          assert(argc == 1)
+          js.BinaryOp(funName, receiver, args.head)
 
-          case "charAt" | "codePointAt" if isString =>
-            js.ApplyMethod(receiver, js.Ident("charCodeAt"), args)
+        case "apply" =>
+          js.Apply(receiver, args)
 
-          case "length" if isString =>
-            js.DotSelect(receiver, js.Ident("length"))
+        case "charAt" | "codePointAt" if isString =>
+          js.ApplyMethod(receiver, js.Ident("charCodeAt"), args)
 
-          case _ =>
-            def wasNullaryMethod(sym: Symbol) = {
-              beforePhase(currentRun.uncurryPhase) {
-                sym.tpe.isInstanceOf[NullaryMethodType]
-              }
+        case "length" if isString =>
+          js.DotSelect(receiver, js.Ident("length"))
+
+        case _ =>
+          def wasNullaryMethod(sym: Symbol) = {
+            beforePhase(currentRun.uncurryPhase) {
+              sym.tpe.isInstanceOf[NullaryMethodType]
             }
+          }
 
-            if (argc == 0 && (sym.isGetter || wasNullaryMethod(sym))) {
-              js.Select(receiver, js.PropertyName(funName))
-            } else if (argc == 1 && sym.isSetter) {
-              statToExpr(js.Assign(
-                  js.Select(receiver,
-                      js.PropertyName(funName.substring(0, funName.length-2))),
-                  args.head))
-            } else {
-              js.ApplyMethod(receiver, js.PropertyName(funName), args)
-            }
-        }
+          if (argc == 0 && (sym.isGetter || wasNullaryMethod(sym)) && !forceFunction) {
+            js.Select(receiver, js.PropertyName(funName))
+          } else if (argc == 1 && sym.isSetter && !forceFunction) {
+            statToExpr(js.Assign(
+                js.Select(receiver,
+                    js.PropertyName(funName.substring(0, funName.length-2))),
+                args.head))
+          } else {
+            js.ApplyMethod(receiver, js.PropertyName(funName), args)
+          }
       }
     }
 
@@ -1883,25 +1882,27 @@ abstract class GenJSCode extends SubComponent
     /** Gen JS code representing a JS class (subclass of js.Any) */
     private def genPrimitiveJSClass(sym: Symbol)(
         implicit pos: Position): js.Tree = {
-      /* TODO Improve this, so that the JS name is not bound to the Scala name
-       * (idea: annotation on the class? optional annot?) */
-      val className = js.Ident(sym.nameString)
-      genSelectInGlobalScope(className)
+      genGlobalJSObject(sym)
     }
 
     /** Gen JS code representing a JS module (var of the global scope) */
     private def genPrimitiveJSModule(sym: Symbol)(
         implicit pos: Position): js.Tree = {
-      /* TODO Improve this, so that the JS name is not bound to the Scala name
-       * (idea: annotation on the class? optional annot?) */
-      val moduleName = js.Ident(sym.nameString)
-      genSelectInGlobalScope(moduleName)
+      genGlobalJSObject(sym)
     }
 
-    /** Gen JS code selecting a field of the global scope */
-    private def genSelectInGlobalScope(property: js.PropertyName)(
+    /** Gen JS code representing a JS object (class or module)
+     *  in global scope
+     */
+    private def genGlobalJSObject(sym: Symbol)(
         implicit pos: Position): js.Tree = {
-      js.Select(envField("g"), property)
+      jsNameOf(sym) map { str=>
+        str.split('.').foldLeft(envField("g")) {(memo, chunk) =>
+          js.Select(memo, js.Ident(chunk))
+        }
+      } getOrElse {
+        js.Select(envField("g"), js.Ident(sym.nameString))
+      }
     }
 
     /** Gen actual actual arguments to a primitive JS call
@@ -2011,4 +2012,12 @@ abstract class GenJSCode extends SubComponent
 
   private def isStringType(tpe: Type): Boolean =
     tpe.typeSymbol == StringClass
+
+  /** Get JS name of Symbol if it was specified with JSName annotation */
+  def jsNameOf(sym: Symbol): Option[String] = {
+    if (isScalaJSDefined)
+      sym.getAnnotation(JSNameAnnotation) flatMap (_ stringArg 0)
+    else
+      None
+  }
 }
